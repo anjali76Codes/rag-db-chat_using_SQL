@@ -20,15 +20,9 @@ DB_PORT = os.getenv("DB_PORT")
 # Get the Google API key
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Get the Hugging Face API key
-HUGGING_FACE_API_KEY = os.getenv("HUGGING_FACE_API_KEY")
-
 # Configure Google Genai Key
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
-
-# Hugging Face API URL for text summarization
-HF_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
 
 
 # Create a connection to the database using SQLAlchemy
@@ -121,44 +115,29 @@ def get_sql_suggestion(user_input):
         return ""
 
 
-def get_sql_response_explanation(df):
-    # Convert the dataframe to a string for input to Hugging Face model
+# Function to get a summarized response for the SQL query result using Gemini Pro
+def get_sql_response_explanation(df, user_input):
+    # Convert the dataframe to a string for input to Gemini model
     df_str = df.to_string(index=False)
 
-    # Define the prompt with an example and clear instructions
+    # Creating a prompt for Gemini Pro to summarize the results
     prompt = f"""
-    You are an assistant that explains SQL query results in a simple, structured way.
-
-    Here is an example of how to explain a row from an SQL query result:
-
-    Example: 
-    Input Row: 1, "Anjali Gupta", "2004-04-15", "Female", "2022-07-01", 8.5, true
-    Output: "Anjali Gupta is the student with id 1. She is female and was born on April 15, 2004. Her enrollment date is July 1, 2022, and she has scored a pointer of 8.5 in college."
-
-    Now, explain the following SQL result in a similar format:
-
+    The user asked: "{user_input}"
+    The SQL query results are as follows:
     {df_str}
 
-    Please ensure your explanation is concise and to the point. Avoid jargon and unnecessary detail.
+    Provide a short 1-2 sentence summary of the results as an answer to the user's query.
+    The response should be clear, concise, and in the same tone as answering the user's question.
     """
 
-    payload = {"inputs": prompt}
-    headers = {"Authorization": f"Bearer {HUGGING_FACE_API_KEY}"}
-
     try:
-        response = requests.post(HF_URL, headers=headers, json=payload)
-        response.raise_for_status()  # This will raise an error for status codes >= 400
-        response_json = response.json()
-
-        # Check if the response is valid and contains the expected result
-        if isinstance(response_json, list) and len(response_json) > 0:
-            explanation = response_json[0].get("summary_text", "No summary provided.")
-            return explanation
+        response = model.generate_content(prompt)
+        if hasattr(response, "text"):
+            return response.text.strip()
         else:
-            st.error("Invalid response format from Hugging Face API.")
-            return "Unable to generate an explanation."
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error calling Hugging Face API: {e}")
+            return "Error generating explanation."
+    except Exception as e:
+        st.error(f"Error generating response with Gemini: {e}")
         return "Error generating explanation."
 
 
@@ -171,9 +150,7 @@ def app():
     # Get SQL suggestion from Gemini
     suggested_query = get_sql_suggestion(user_need)
 
-    query = st.text_area(
-        "Enter your SQL query here:", value=suggested_query, height=150
-    )
+    query = st.text_area("LLM Converted SQL query:", value=suggested_query, height=150)
 
     if st.button("Execute Query"):
         if query:
@@ -182,9 +159,9 @@ def app():
                 st.write("Query Results:")
                 st.dataframe(result_df)  # Display the results as a table
 
-                # Get explanation for SQL result using Hugging Face model
-                explanation = get_sql_response_explanation(result_df)
-                st.write("Explanation of the Results:")
+                # Get explanation for SQL result using Gemini Pro
+                explanation = get_sql_response_explanation(result_df, user_need)
+                st.write("End user response:")
                 st.write(explanation)
             else:
                 st.success("Query executed successfully, no result to display.")
