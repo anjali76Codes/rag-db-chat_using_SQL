@@ -5,6 +5,7 @@ import pandas as pd
 from dotenv import load_dotenv
 import os
 import google.generativeai as genai
+import requests
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,9 +20,15 @@ DB_PORT = os.getenv("DB_PORT")
 # Get the Google API key
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# Get the Hugging Face API key
+HUGGING_FACE_API_KEY = os.getenv("HUGGING_FACE_API_KEY")
+
 # Configure Google Genai Key
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
+
+# Hugging Face API URL for text summarization
+HF_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
 
 
 # Create a connection to the database using SQLAlchemy
@@ -88,7 +95,7 @@ def get_sql_suggestion(user_input):
 
         Example 4:
         Request: "Find all students with GPA greater than 8."
-        Query: "SELECT * FROM public.\"Students\" WHERE gpa > 8;"
+        Query: "SELECT * FROM public.\"Students\" WHERE pointer > 8;"
 
         Example 5:
         Request: "Show students who joined after July 1st, 2022."
@@ -114,9 +121,50 @@ def get_sql_suggestion(user_input):
         return ""
 
 
+def get_sql_response_explanation(df):
+    # Convert the dataframe to a string for input to Hugging Face model
+    df_str = df.to_string(index=False)
+
+    # Define the prompt with an example and clear instructions
+    prompt = f"""
+    You are an assistant that explains SQL query results in a simple, structured way.
+
+    Here is an example of how to explain a row from an SQL query result:
+
+    Example: 
+    Input Row: 1, "Anjali Gupta", "2004-04-15", "Female", "2022-07-01", 8.5, true
+    Output: "Anjali Gupta is the student with id 1. She is female and was born on April 15, 2004. Her enrollment date is July 1, 2022, and she has scored a pointer of 8.5 in college."
+
+    Now, explain the following SQL result in a similar format:
+
+    {df_str}
+
+    Please ensure your explanation is concise and to the point. Avoid jargon and unnecessary detail.
+    """
+
+    payload = {"inputs": prompt}
+    headers = {"Authorization": f"Bearer {HUGGING_FACE_API_KEY}"}
+
+    try:
+        response = requests.post(HF_URL, headers=headers, json=payload)
+        response.raise_for_status()  # This will raise an error for status codes >= 400
+        response_json = response.json()
+
+        # Check if the response is valid and contains the expected result
+        if isinstance(response_json, list) and len(response_json) > 0:
+            explanation = response_json[0].get("summary_text", "No summary provided.")
+            return explanation
+        else:
+            st.error("Invalid response format from Hugging Face API.")
+            return "Unable to generate an explanation."
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error calling Hugging Face API: {e}")
+        return "Error generating explanation."
+
+
 # Streamlit UI
 def app():
-    st.title("SQL Query Executor with Gemini Pro Suggestion")
+    st.title("SQL Query Executor with Gemini Pro Suggestion and Explanation")
 
     user_need = st.text_input("Describe your data need to get a SQL query suggestion:")
 
@@ -133,6 +181,11 @@ def app():
             if result_df is not None and not result_df.empty:
                 st.write("Query Results:")
                 st.dataframe(result_df)  # Display the results as a table
+
+                # Get explanation for SQL result using Hugging Face model
+                explanation = get_sql_response_explanation(result_df)
+                st.write("Explanation of the Results:")
+                st.write(explanation)
             else:
                 st.success("Query executed successfully, no result to display.")
         else:
